@@ -11,7 +11,7 @@ namespace MFCServer1
         {
             Console.WriteLine("[SERVER] C# TCP Inspection Server Starting...");
 
-            var pythonService = new PythonTcpClient("127.0.0.1", 9100);
+            var pythonService = new PythonTcpClient("127.0.0.1", 8008);
 
             var dbService = new DatabaseService(
                 "Server=127.0.0.1;Database=qcdb;Uid=root;Pwd=1234;Charset=utf8mb4;"

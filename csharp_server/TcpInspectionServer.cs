@@ -85,22 +85,26 @@ namespace MFCServer1
 
                 // 파이썬 분석 요청
                 string pyResultJson;
+                Console.WriteLine("[TCP] Call Python AnalyzeDualAsync...");
                 if (hasTop && hasSide)
                 {
                     pyResultJson = _python.AnalyzeDualAsync(topPath, sidePath).Result;
                 }
                 else if (hasTop)
                 {
+                    Console.WriteLine("[TCP] Call Python AnalyzeSingleAsync (top)...");
                     pyResultJson = _python.AnalyzeSingleAsync(topPath, "top").Result;
                 }
                 else if (hasSide)
                 {
+                    Console.WriteLine("[TCP] Call Python AnalyzeSingleAsync (side)...");
                     pyResultJson = _python.AnalyzeSingleAsync(sidePath, "side").Result;
                 }
                 else
                 {
                     pyResultJson = "{\"result\":\"비정상\",\"error\":\"no image\"}";
                 }
+                Console.WriteLine("[TCP] PY RESULT: " + pyResultJson);
 
                 Console.WriteLine("[TCP] PY RESULT: " + pyResultJson);
 
@@ -132,7 +136,7 @@ namespace MFCServer1
             }
             catch (Exception ex)
             {
-                Console.WriteLine("[TCP] HandleClient error: " + ex.Message);
+                Console.WriteLine("[TCP] HandleClient error: " + ex.ToString());
             }
             finally
             {
