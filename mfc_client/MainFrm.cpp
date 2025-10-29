@@ -6,6 +6,7 @@
 #include "resource.h"
 #include <Shlwapi.h>
 #pragma comment(lib, "Shlwapi.lib")
+#include "CCameraSetupDlg.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -264,7 +265,14 @@ void CMainFrame::CreateDynamicButtonsLayout()
         int idx = (int)m_vecCamButtons.size();
         auto* pBtn = new CButton;
         CString label;
-        label.Format(_T("CAM %d"), idx + 1);
+        if (idx < m_CamConfigs.size() && !m_CamConfigs[idx].sFriendlyName.IsEmpty())
+        {
+            label = m_CamConfigs[idx].sFriendlyName;
+        }
+        else
+        {
+            label.Format(_T("CAM %d"), idx + 1);
+        }
 
         UINT idCmd = ID_CAMERA_BTN_BASE + idx; // ID_CAMERA_BTN_BASE + n
 
@@ -345,13 +353,55 @@ void CMainFrame::OnManualCaptureClick()
 // ----------------------------------------------------------
 // "설정" 버튼: 카메라 설정 다이얼로그 (IP/포트/모션) 띄우고 저장 후 재연결
 // ----------------------------------------------------------
+// ----------------------------------------------------------
+// "설정" 버튼: 카메라 설정 다이얼로그 (IP/포트/모션) 띄우고 저장 후 재연결
+// ----------------------------------------------------------
 void CMainFrame::OnSettingsClick()
 {
-    // 너 원본 코드의 CCameraSetupDlg 열고,
-    // m_CamConfigs 편집하고,
-    // m_CameraManager.DisconnectAll() → ApplyConfigs() → ConnectAll()
-    // LivePanel 탭 다시 BuildTabs() 등등 하는 흐름 그대로 유지하되,
-    // 마지막에 UpdateLayout() 부를 때도 IsLivePanelUsable() 체크가 걸리게 됐으니 안정적.
+    // 1. 설정 다이얼로그를 엽니다.
+    //    이 다이얼로그는 DoModal()이 끝난 후 (OK 버튼 클릭 시)
+    //    CCameraSetupDlg::OnBnClickedSave() 내부에서 
+    //    이미 config.ini 파일에 설정을 저장한 상태입니다.
+    CCameraSetupDlg dlg(this);
+    if (dlg.DoModal() != IDOK)
+    {
+        return; // 사용자가 '취소'를 눌렀습니다.
+    }
+
+    // 2. 다이얼로그에서 설정이 저장되었으므로,
+    //    모든 카메라 연결을 끊고 새 설정으로 다시 로드/연결합니다.
+
+    AfxMessageBox(_T("카메라 설정을 변경합니다. 모든 카메라를 다시 연결합니다."));
+
+    // 3. 기존 모든 카메라 연결 해제
+    m_CameraManager.DisconnectAll();
+    m_vecCamButtons.clear(); // 버튼도 정리 (CreateDynamicButtonsLayout에서 다시 만듦)
+
+    // 4. 새 설정 로드 (config.ini -> m_CamConfigs)
+    //    (LoadConfigs 함수가 LoadCameraConfigs를 호출하도록 수정 필요.
+    //     아래 5번 항목 참고)
+    LoadConfigs();
+
+    // 5. 새 설정으로 카메라 연결
+    for (size_t i = 0; i < m_CamConfigs.size(); ++i)
+    {
+        const CameraConfig& cfg = m_CamConfigs[i];
+        m_CameraManager.ConnectCamera(cfg, m_hWnd);
+    }
+
+    // 6. LivePanel 탭 재구성
+    m_LivePanel.BuildTabs(m_CamConfigs);
+
+    // 7. 메인 UI 레이아웃 (버튼 등) 갱신
+    CRect rc; GetClientRect(&rc);
+    UpdateLayout(rc.Width(), rc.Height());
+
+    // 8. 뷰 갱신
+    if (m_pView)
+    {
+        m_pView->SetActiveCamera(0); // 첫 번째 카메라로 뷰 리셋
+        m_pView->Invalidate(FALSE);
+    }
 }
 
 
@@ -421,19 +471,21 @@ LRESULT CMainFrame::OnCameraStatus(WPARAM wParam, LPARAM lParam)
 
 
 // ----------------------------------------------------------
-// 설정 불러오기 / 저장하기 (ini) - 기존 코드 유지
+// 설정 불러오기 / 저장하기 (ini)
 // ----------------------------------------------------------
 void CMainFrame::LoadConfigs()
 {
-    // 기존에 하던 대로 config.ini 읽어서
-    // m_CamConfigs 채우고
-    // m_LivePanel.ApplyConfig(dockWidth, state, floatRect, fpsCap, jpegQuality);
+    // config.ini 에서 카메라 설정(m_CamConfigs)과
+    // 패널 설정(m_LivePanel)을 불러옵니다.
+    // (LoadCameraConfigs 함수가 패널 설정도 같이 로드함)
+    LoadCameraConfigs(m_CamConfigs);
 }
 
 void CMainFrame::SaveConfigs()
 {
     // 현재 m_CamConfigs, m_LivePanel 상태(DockState, 위치 등)를
-    // config.ini로 써주는 기존 코드 유지
+    // config.ini로 저장합니다.
+    SaveCameraConfigs(m_CamConfigs);
 }
 
 CString CMainFrame::GetIniPath() const
