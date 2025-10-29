@@ -12,6 +12,9 @@
 #include <gdiplus.h> // GdiplusStartup/Shutdown 사용 위해 포함 (보통 pch.h에 이미 있음)
 #pragma comment(lib, "gdiplus.lib") // GDI+ 라이브러리 링크
 
+#include <stdlib.h>
+
+
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
@@ -34,18 +37,23 @@ CFactoryVisionClientApp::CFactoryVisionClientApp() noexcept
 
 BOOL CFactoryVisionClientApp::InitInstance()
 {
+    // <<< Pylon GigE Heartbeat 설정 (예: 5000ms) 추가 >>>
+    // Release 모드에서도 설정되도록 #ifdef 제거
+    if (_putenv("PYLON_GIGE_HEARTBEAT=5000") != 0)
+    {
+        // 환경 변수 설정 실패 시 메시지 (선택 사항)
+        AfxMessageBox(_T("Warning: Failed to set PYLON_GIGE_HEARTBEAT environment variable."), MB_ICONWARNING);
+    }
     INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_WIN95_CLASSES };
     InitCommonControlsEx(&icc);
     CWinApp::InitInstance();
 
     // OLE 라이브러리를 초기화합니다.
     if (!AfxOleInit())
-    {
-        // --- 수정된 부분 (IDP_OLE_INIT_FAILED 정의 확인) ---
+    {        
         // Resource.h에 IDP_OLE_INIT_FAILED 정의가 있는지 확인 필요.
         // 일반적으로 MFC 프로젝트 생성 시 자동으로 추가됩니다.
         AfxMessageBox(IDP_OLE_INIT_FAILED);
-        // --- 수정 끝 ---
         return FALSE;
     }
     AfxEnableControlContainer();

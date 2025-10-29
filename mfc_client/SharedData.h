@@ -1,8 +1,11 @@
 #pragma once
-#include <afxmt.h> // For CCriticalSection, CString, etc. (should be included via pch.h -> framework.h)
-// #include <opencv2/core.hpp> // REMOVE - Should be included via pch.h
-// #include <nlohmann/json.hpp> // REMOVE - Should be included via pch.h
+#include <afxmt.h> 
 #include <vector> // Keep standard headers if needed specifically here, though likely in pch.h
+#include <opencv2/opencv.hpp>
+#include <string>
+#include <list>
+#include <afxwin.h> // CWnd, HWND 등
+#include <pylon/PylonIncludes.h> // Pylon::CInstantCamera 사용 위해 추가
 
 // Forward declare Pylon types if full definition not needed, otherwise ensure pch.h includes them
 namespace Pylon {
@@ -45,13 +48,15 @@ struct InspectionResult {
 
 // 카메라 설정
 struct CameraConfig {
-    int nIndex{};
-    CString sFriendlyName;
-    CString sSerial;
-    CString sIp;
-    int nPort{};
-    int nMotionThreshold{ 5000 };
-    BOOL bMotionEnabled{ TRUE };
+    int     nIndex = -1;         // 0-based index
+    CString sSerial;           // 카메라 시리얼 번호 (Pylon 식별용)
+    CString sFriendlyName;     // 사용자 지정 이름 (UI 표시용)
+    CString sIp;               // TCP 서버 IP 주소
+    int     nPort = 9000;      // TCP 서버 포트
+    BOOL    bMotionEnabled = TRUE; // 모션 감지 사용 여부
+    int     nMotionThreshold = 5000; // 모션 감지 임계값
+    double  dExposureTime = 10000.0; // 노출 시간 (us) - 기본값 예시
+    double  dGain = 1.0;            // 게인 값 - 기본값 예시
 };
 
 // 스레드 파라미터

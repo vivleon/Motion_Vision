@@ -548,6 +548,15 @@ BOOL CMainFrame::LoadCameraConfigs(std::vector<CameraConfig>& out)
         cfg.bMotionEnabled = GetPrivateProfileInt(sec, _T("MotionEnable"), 1, ini);
         cfg.nMotionThreshold = GetPrivateProfileInt(sec, _T("Threshold"), 5000, ini);
 
+        // <<< 상세 설정 로드 >>>
+        // GetPrivateProfileString으로 읽고 _ttof 사용하여 double로 변환
+        GetPrivateProfileString(sec, _T("ExposureTime"), _T("10000.0"), buf, _countof(buf), ini);
+        cfg.dExposureTime = _ttof(buf);
+
+        GetPrivateProfileString(sec, _T("Gain"), _T("1.0"), buf, _countof(buf), ini);
+        cfg.dGain = _ttof(buf);
+		// <<< 상세 설정 로드 끝 >>>
+
         out.push_back(cfg);
     }
 
@@ -591,42 +600,54 @@ BOOL CMainFrame::SaveCameraConfigs(const std::vector<CameraConfig>& cfgs)
 {
     CString ini = GetIniPath();
 
+    // <<< 기존 카메라 섹션 클리어 (선택 사항, 중복 방지) >>>
+    // 예를 들어, CAM1 ~ CAM_MAX 까지의 섹션을 지우는 로직 추가 가능
+    // WritePrivateProfileSection(_T("CAM1"), NULL, ini); // 이런 식으로 반복
+
     for (const auto& cfg : cfgs)
     {
         CString sec;
         sec.Format(_T("CAM%d"), cfg.nIndex + 1);
 
-        // Serial
         WritePrivateProfileString(sec, _T("Serial"), cfg.sSerial, ini);
-
-        // Name (우호 이름)
         WritePrivateProfileString(sec, _T("Name"), cfg.sFriendlyName, ini);
-
-        // IP
         WritePrivateProfileString(sec, _T("IP"), cfg.sIp, ini);
 
-        // Port
-        {
-            CString v;
-            v.Format(_T("%d"), cfg.nPort);
-            WritePrivateProfileString(sec, _T("Port"), v, ini);
-        }
+        CString v; // 임시 문자열 버퍼
+        v.Format(_T("%d"), cfg.nPort);
+        WritePrivateProfileString(sec, _T("Port"), v, ini);
 
-        // MotionEnable
-        {
-            CString v;
-            v.Format(_T("%d"), cfg.bMotionEnabled ? 1 : 0);
-            WritePrivateProfileString(sec, _T("MotionEnable"), v, ini);
-        }
+        v.Format(_T("%d"), cfg.bMotionEnabled ? 1 : 0);
+        WritePrivateProfileString(sec, _T("MotionEnable"), v, ini);
 
-        // Threshold
-        {
-            CString v;
-            v.Format(_T("%d"), cfg.nMotionThreshold);
-            WritePrivateProfileString(sec, _T("Threshold"), v, ini);
-        }
+        v.Format(_T("%d"), cfg.nMotionThreshold);
+        WritePrivateProfileString(sec, _T("Threshold"), v, ini);
+
+        // <<< 상세 설정 저장 >>>
+        // double 값을 문자열로 변환하여 저장 (소수점 정밀도 지정 가능)
+        v.Format(_T("%.1f"), cfg.dExposureTime); // 예: 소수점 첫째 자리까지
+        WritePrivateProfileString(sec, _T("ExposureTime"), v, ini);
+
+        v.Format(_T("%.2f"), cfg.dGain); // 예: 소수점 둘째 자리까지
+        WritePrivateProfileString(sec, _T("Gain"), v, ini);
+        // <<< --- 저장 끝 --- >>>
     }
 
+    // <<< cfgs에 없는 인덱스의 섹션 제거 (카메라 삭제 시) >>>
+    std::vector<bool> saved(MAX_CAMERAS, false);
+    for (const auto& cfg : cfgs) {
+        if (cfg.nIndex >= 0 && cfg.nIndex < MAX_CAMERAS) {
+            saved[cfg.nIndex] = true;
+        }
+    }
+    for (int i = 0; i < MAX_CAMERAS; ++i) {
+        if (!saved[i]) {
+            CString sec;
+            sec.Format(_T("CAM%d"), i + 1);
+            WritePrivateProfileSection(sec, NULL, ini); // 섹션 내용 전체 삭제
+        }
+    }
+    // <<< --- 제거 끝 --- >>>
     // 패널 상태도 같이 저장해주면 깔끔
     {
         CString secPanel = _T("Panel");

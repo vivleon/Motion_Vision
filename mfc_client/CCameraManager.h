@@ -1,9 +1,6 @@
 #pragma once
-// #include <pylon/PylonIncludes.h> // Already in pch.h
-// #include <pylon/gige/BaslerGigEInstantCamera.h> // Already in pch.h
-// #include <opencv2/opencv.hpp> // Already in pch.h
-// #include "SharedData.h" // Already in pch.h
 #include "CTcpCommunicator.h" // Needs definition before use
+#include "SharedData.h"
 
 // Forward declaration if needed, but include preferred if definition required
 namespace Pylon {
@@ -22,6 +19,14 @@ public:
     BOOL IsCameraConnected(int idx);
     void TriggerManualCapture(int idx);
     void UpdateMotionSettings(int idx, BOOL enable, int threshold);
+    // <<< GenICam 파라미터 접근 함수 추가 (샘플 코드 기반) >>>
+    BOOL GetParameterFloat(int nCamIndex, double& dValue, const char* szNodeName);
+    BOOL SetParameterFloat(int nCamIndex, double dValue, const char* szNodeName);
+    BOOL GetParameterInt(int nCamIndex, int64_t& nValue, const char* szNodeName);
+    BOOL SetParameterInt(int nCamIndex, int64_t nValue, const char* szNodeName);
+    BOOL GetParameterEnum(int nCamIndex, CString& sValue, const char* szNodeName);
+    BOOL SetParameterEnum(int nCamIndex, const CString& sValue, const char* szNodeName);
+    BOOL ExecuteCommand(int nCamIndex, const char* szNodeName);
 
 private:
     Pylon::PylonAutoInitTerm m_pylonAutoInitTerm; // Semicolon was likely okay here
