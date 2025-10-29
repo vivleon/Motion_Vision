@@ -1,84 +1,122 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 
 namespace MFCServer1
 {
+    // 전역 상태 저장 및 최근 검사 로그 기록
     public static class ServerMonitor
     {
-        // 상태 값들 (기존 그대로)
-        public static bool TcpListening = false;
-        public static int TcpPort = 9001;
+        private static readonly object _lock = new object();
 
-        public static bool PythonAlive = false;
-        public static string PythonLastError = "";
+        // TCP 서버 상태
+        public static bool TcpListening { get; private set; } = false;
+        public static int TcpPort { get; private set; } = 9001;
 
-        public static string LastClient = "";
-        public static DateTime LastClientTime = DateTime.MinValue;
+        // 파이썬 AI 상태
+        public static bool PythonAlive { get; private set; } = false;
+        public static string PythonLastError { get; private set; } = "None";
 
-        public static string LastResult = "";
+        // 최근 접속자
+        public static string LastClient { get; private set; } = "-";
+        public static DateTime LastClientTime { get; private set; } = DateTime.MinValue;
 
-        public static string LastTopImagePath = "";
-        public static string LastSideImagePath = "";
+        // 최근 판정 / 이미지 경로
+        public static string LastResult { get; private set; } = "-";
+        public static string LastTopImagePath { get; private set; } = "";
+        public static string LastSideImagePath { get; private set; } = "";
 
-        // 증가시키는 번호용
-        private static int _nextId = 1;
+        // 그리드에 바인딩할 검사 로그 저장소
+        private static readonly List<InspectionRecord> _history = new List<InspectionRecord>();
+        private static long _nextId = 1;
 
-        private static readonly List<InspectionRecord> _history =
-            new List<InspectionRecord>();
-
+        // 그리드 한 줄이 가질 데이터 구조
         public class InspectionRecord
         {
-            public int Id { get; set; }               // 번호
-            public DateTime Time { get; set; }        // 시간
-            public string Result { get; set; }        // "정상"/"비정상"
-            public string Reason { get; set; }        // 불합격 사유
-            public string TopPath { get; set; }       // TOP 이미지 경로
-            public string SidePath { get; set; }      // SIDE 이미지 경로
+            public long Id { get; set; }          // 번호
+            public DateTime Time { get; set; }    // 시간
+            public string Result { get; set; }    // 결과 ("정상" / "비정상" / "에러")
+            public string Reason { get; set; }    // 불합격 사유 (없으면 "")
+            public string TopPath { get; set; }   // TOP 경로
+            public string SidePath { get; set; }  // SIDE 경로
         }
 
-        public static IList<InspectionRecord> GetRecent()
+        public static void UpdateServerStatus(bool listening, int port)
         {
-            return new List<InspectionRecord>(_history);
-        }
-
-        // result: "정상"/"비정상"
-        // reason: "dent(0.91), scratch(0.7)" 이런 문자열
-        // topPath / sidePath: 이미지 경로
-        public static void AddLog(string result, string reason, string topPath, string sidePath)
-        {
-            _history.Add(new InspectionRecord
+            lock (_lock)
             {
-                Id = _nextId++,
-                Time = DateTime.Now,
-                Result = result,
-                Reason = reason,
-                TopPath = topPath,
-                SidePath = sidePath
-            });
-
-            if (_history.Count > 50)
-            {
-                _history.RemoveAt(0);
+                TcpListening = listening;
+                TcpPort = port;
             }
         }
 
-        public static async Task StartHealthCheck(PythonTcpClient py)
+        public static void UpdatePythonStatus(bool alive, string err)
         {
-            while (true)
+            lock (_lock)
             {
+                PythonAlive = alive;
+                PythonLastError = string.IsNullOrEmpty(err) ? "None" : err;
+            }
+        }
+
+        public static void UpdateClientInfo(string ip)
+        {
+            lock (_lock)
+            {
+                LastClient = string.IsNullOrEmpty(ip) ? "-" : ip;
+                LastClientTime = DateTime.Now;
+            }
+        }
+
+        public static void RecordInspection(
+            DateTime time,
+            string result,
+            string reason,
+            string topPath,
+            string sidePath
+        )
+        {
+            lock (_lock)
+            {
+                // 최신 상태(상단 라벨/미리보기용)
+                LastResult = result ?? "-";
+                LastTopImagePath = topPath ?? "";
+                LastSideImagePath = sidePath ?? "";
+
+                // 로그 1건 추가
+                InspectionRecord rec = new InspectionRecord();
+                rec.Id = _nextId++;
+                rec.Time = time;
+                rec.Result = result ?? "";
+                rec.Reason = reason ?? "";
+                rec.TopPath = topPath ?? "";
+                rec.SidePath = sidePath ?? "";
+
+                _history.Add(rec);
+
+                // DB 저장은 여기서 바로 시도 (예외는 상태로만 남기고 죽지 않음)
                 try
                 {
-                    bool ok = await py.CheckHealthAsync();
-                    PythonAlive = ok;
+                    DatabaseService.InsertInspection(
+                        time,
+                        rec.Result,
+                        rec.TopPath,
+                        rec.SidePath,
+                        "" // line/설비 등 필요하면 여기에 채워
+                    );
                 }
                 catch (Exception ex)
                 {
-                    PythonAlive = false;
-                    PythonLastError = ex.Message;
+                    PythonLastError = "[DB] " + ex.Message;
                 }
+            }
+        }
 
-                await Task.Delay(1000);
+        public static List<InspectionRecord> GetRecent()
+        {
+            lock (_lock)
+            {
+                // 바인딩에 쓸 복사본 반환
+                return new List<InspectionRecord>(_history);
             }
         }
     }

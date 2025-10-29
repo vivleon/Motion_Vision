@@ -4,20 +4,20 @@ using System.Windows.Forms;
 using System.Drawing;
 using System.IO;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace MFCServer1
 {
     public partial class Form2 : Form
     {
-        private Timer _timer;
+        private System.Windows.Forms.Timer _timer;   // UI 갱신 타이머
 
         public Form2()
         {
             InitializeComponent();
 
-            // =========================
-            // DataGridView 스타일 / 기본 설정
-            // =========================
+            // ===== DataGridView 스타일/컬럼 설정 =====
+            // (너 기존 코드 그대로 유지)
             dataGridView1.AutoGenerateColumns = false;
             dataGridView1.Columns.Clear();
 
@@ -48,11 +48,7 @@ namespace MFCServer1
             dataGridView1.DefaultCellStyle.SelectionBackColor = Color.SteelBlue;
             dataGridView1.DefaultCellStyle.SelectionForeColor = Color.White;
 
-            // =========================
-            // 컬럼 구성 (번호 / 시간 / 결과 / 불합격 사유 / TOP 경로 / SIDE 경로)
-            // =========================
-
-            // 번호
+            // ===== 컬럼들 =====
             var colId = new DataGridViewTextBoxColumn
             {
                 HeaderText = "번호",
@@ -66,7 +62,6 @@ namespace MFCServer1
                 }
             };
 
-            // 시간
             var colTime = new DataGridViewTextBoxColumn
             {
                 HeaderText = "시간",
@@ -82,7 +77,6 @@ namespace MFCServer1
                 }
             };
 
-            // 결과 (정상 / 비정상)
             var colResult = new DataGridViewTextBoxColumn
             {
                 HeaderText = "결과",
@@ -98,7 +92,6 @@ namespace MFCServer1
                 }
             };
 
-            // 불합격 사유
             var colReason = new DataGridViewTextBoxColumn
             {
                 HeaderText = "불합격 사유",
@@ -113,7 +106,6 @@ namespace MFCServer1
                 }
             };
 
-            // TOP 경로
             var colTopPath = new DataGridViewTextBoxColumn
             {
                 HeaderText = "TOP 경로",
@@ -128,7 +120,6 @@ namespace MFCServer1
                 }
             };
 
-            // SIDE 경로
             var colSidePath = new DataGridViewTextBoxColumn
             {
                 HeaderText = "SIDE 경로",
@@ -149,7 +140,6 @@ namespace MFCServer1
             dataGridView1.Columns.Add(colTopPath);
             dataGridView1.Columns.Add(colSidePath);
 
-            // 결과 색상 강조 (정상=초록 / 비정상=빨강)
             dataGridView1.CellFormatting += (s, e) =>
             {
                 if (dataGridView1.Columns[e.ColumnIndex].DataPropertyName == "Result" &&
@@ -157,34 +147,51 @@ namespace MFCServer1
                 {
                     string val = e.Value.ToString();
                     if (val.Contains("비정상"))
-                    {
                         e.CellStyle.ForeColor = Color.Red;
-                    }
                     else if (val.Contains("정상"))
-                    {
                         e.CellStyle.ForeColor = Color.Green;
-                    }
                 }
             };
 
-            // =========================
-            // 타이머 설정
-            // =========================
-            _timer = new Timer();
-            _timer.Interval = 1000; // 1초마다 상태/로그 갱신
+            // ===== UI 갱신 타이머 =====
+            _timer = new System.Windows.Forms.Timer();
+            _timer.Interval = 1000;
             _timer.Tick += Timer_Tick;
             _timer.Start();
+
+            // ===== 파이썬 헬스체크 "딱 한 번만" =====
+            _ = KickPythonHealthOnce();  // fire & forget OK
         }
 
-        // ---------------------------------
-        // 주기적으로 UI 갱신
-        // ---------------------------------
+        // 폼 뜰 때 한 번만 파이썬 서버(127.0.0.1:8009) ping
+        private async Task KickPythonHealthOnce()
+        {
+            try
+            {
+                var py = new PythonTcpClient("127.0.0.1", 8009);
+                bool ok = await py.HealthCheckAsync(); // 0x01 -> "OK"
+                if (ok)
+                {
+                    ServerMonitor.UpdatePythonStatus(true, "");
+                }
+                else
+                {
+                    ServerMonitor.UpdatePythonStatus(false, "No OK");
+                }
+            }
+            catch (Exception ex)
+            {
+                ServerMonitor.UpdatePythonStatus(false, ex.Message);
+            }
+        }
+
+        // 1초마다 서버 상태 + 로그 갱신 + 이미지 갱신
         private void Timer_Tick(object sender, EventArgs e)
         {
-            // ---- TCP 상태 표시 ----
+            // TCP 상태
             if (ServerMonitor.TcpListening)
             {
-                lblTcpStatus.Text = $"TCP LISTENING : Port {ServerMonitor.TcpPort}";
+                lblTcpStatus.Text = "TCP LISTENING : Port " + ServerMonitor.TcpPort;
                 lblTcpStatus.ForeColor = Color.LimeGreen;
             }
             else
@@ -193,7 +200,7 @@ namespace MFCServer1
                 lblTcpStatus.ForeColor = Color.Red;
             }
 
-            // ---- Python 상태 표시 ----
+            // PYTHON 상태 (마지막 체크 결과 유지)
             if (ServerMonitor.PythonAlive)
             {
                 lblPythonStatus.Text = "PYTHON OK";
@@ -205,16 +212,20 @@ namespace MFCServer1
                 lblPythonStatus.ForeColor = Color.Red;
             }
 
-            // ---- 기타 상태 라벨 ----
+            // 기타 라벨
             lblPythonError.Text = "LastError: " + ServerMonitor.PythonLastError;
-            lblLastClient.Text =
-                $"LastClient: {ServerMonitor.LastClient} at {ServerMonitor.LastClientTime:HH:mm:ss}";
-            lblLastResult.Text = $"LastResult: {ServerMonitor.LastResult}";
 
-            // ---- 로그 테이블 갱신 ----
-            // ServerMonitor에서 최근 로그 히스토리를 가져와서
-            // 최신순(최근이 위로 오도록) 정렬 후 바인딩
-            var latestLogs = ServerMonitor
+            lblLastClient.Text =
+                "LastClient: " + ServerMonitor.LastClient +
+                " at " +
+                (ServerMonitor.LastClientTime == DateTime.MinValue
+                    ? "-"
+                    : ServerMonitor.LastClientTime.ToString("HH:mm:ss"));
+
+            lblLastResult.Text = "LastResult: " + ServerMonitor.LastResult;
+
+            // 로그 최신순 바인딩
+            List<ServerMonitor.InspectionRecord> latestLogs = ServerMonitor
                 .GetRecent()
                 .OrderByDescending(x => x.Time)
                 .ToList();
@@ -222,58 +233,36 @@ namespace MFCServer1
             dataGridView1.DataSource = latestLogs;
             dataGridView1.Refresh();
 
-            // ---- 마지막 검사 이미지 자동 미리보기 ----
+            // 마지막 판정 이미지 미리보기
             ShowImages(ServerMonitor.LastTopImagePath, ServerMonitor.LastSideImagePath);
         }
 
-        // ---------------------------------
-        // 로그 행 클릭 시 해당 이미지 표시
-        // ---------------------------------
         private void dataGridView1_CellClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0) return; // 헤더 클릭이면 무시
+            if (e.RowIndex < 0)
+                return;
 
             var rowObj = dataGridView1.Rows[e.RowIndex].DataBoundItem
                          as ServerMonitor.InspectionRecord;
-            if (rowObj == null) return;
+            if (rowObj == null)
+                return;
 
             ShowImages(rowObj.TopPath, rowObj.SidePath);
         }
 
-        // ---------------------------------
-        // PictureBox에 이미지 올리기
-        // ---------------------------------
         private void ShowImages(string topPath, string sidePath)
         {
-            // TOP
             if (!string.IsNullOrEmpty(topPath) && File.Exists(topPath))
             {
-                try
-                {
-                    picTop.Image = LoadImageNoLock(topPath);
-                }
-                catch
-                {
-                    // 이미지 로드 실패해도 UI 안 죽게 무시
-                }
+                try { picTop.Image = LoadImageNoLock(topPath); } catch { }
             }
 
-            // SIDE
             if (!string.IsNullOrEmpty(sidePath) && File.Exists(sidePath))
             {
-                try
-                {
-                    picSide.Image = LoadImageNoLock(sidePath);
-                }
-                catch
-                {
-                    // 무시
-                }
+                try { picSide.Image = LoadImageNoLock(sidePath); } catch { }
             }
         }
 
-        // 파일을 바로 Image.FromFile로 열면 파일 잠금이 걸릴 수 있으므로
-        // MemoryStream 복사 방식으로 안전하게 로드
         private Image LoadImageNoLock(string path)
         {
             using (var fs = new FileStream(
