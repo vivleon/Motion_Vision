@@ -28,8 +28,8 @@
 // CCameraSetupDlg 컨트롤 ID (Pylon 샘플에서 가져옴)
 #define IDC_BUTTON_SEARCH           1001 // <<< 추가
 #define IDC_LIST1                   1002 // <<< 추가
-#define IDC_EDIT_EXPOSURE               1003 // 예시 ID
-#define IDC_EDIT_GAIN                   1004 // 예시 ID
+#define IDC_EDIT_EXPOSURE               1003 
+#define IDC_EDIT_GAIN                   1004 
 
 #define ID_EXPORT_CSV               140
 

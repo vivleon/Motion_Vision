@@ -31,14 +31,19 @@ END_MESSAGE_MAP()
 
 CFactoryVisionClientView::CFactoryVisionClientView() noexcept
 {
-    // --- 수정된 부분 (GDI+ Font 생성 시 new 사용 방식 변경) ---
-    // Gdiplus::Font 생성자가 실패할 수 있으므로 new 사용 방식을 표준으로 변경하고 nullptr 체크 추가
+    // GDI+ 폰트 생성
     m_pFontLarge = ::new Gdiplus::Font(L"Segoe UI", 36, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
     m_pFontMedium = ::new Gdiplus::Font(L"Segoe UI", 18, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     m_pFontSmall = ::new Gdiplus::Font(L"Segoe UI", 12, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     m_pFontDefect = ::new Gdiplus::Font(L"Segoe UI", 14, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-    // --- 수정 끝 ---
+
+    // 폰트 생성 실패 확인 (선택 사항)
+    if (m_pFontLarge && m_pFontLarge->GetLastStatus() != Gdiplus::Ok) { ::delete m_pFontLarge; m_pFontLarge = nullptr; TRACE(_T("Failed to create GDI+ Font (Large)\n")); }
+    if (m_pFontMedium && m_pFontMedium->GetLastStatus() != Gdiplus::Ok) { ::delete m_pFontMedium; m_pFontMedium = nullptr; TRACE(_T("Failed to create GDI+ Font (Medium)\n")); }
+    if (m_pFontSmall && m_pFontSmall->GetLastStatus() != Gdiplus::Ok) { ::delete m_pFontSmall; m_pFontSmall = nullptr; TRACE(_T("Failed to create GDI+ Font (Small)\n")); }
+    if (m_pFontDefect && m_pFontDefect->GetLastStatus() != Gdiplus::Ok) { ::delete m_pFontDefect; m_pFontDefect = nullptr; TRACE(_T("Failed to create GDI+ Font (Defect)\n")); }
 }
+
 CFactoryVisionClientView::~CFactoryVisionClientView()
 {
     delete m_pFontLarge; delete m_pFontMedium; delete m_pFontSmall; delete m_pFontDefect;
@@ -46,6 +51,7 @@ CFactoryVisionClientView::~CFactoryVisionClientView()
 
 BOOL CFactoryVisionClientView::PreCreateWindow(CREATESTRUCT& cs)
 {
+    // (변경 없음)
     cs.style &= ~WS_BORDER;
     cs.lpszClass = AfxRegisterWndClass(CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
         ::LoadCursor(nullptr, IDC_ARROW), reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1), nullptr);
@@ -54,6 +60,10 @@ BOOL CFactoryVisionClientView::PreCreateWindow(CREATESTRUCT& cs)
 
 void CFactoryVisionClientView::OnDraw(CDC* pDC)
 {
+    // <<< TRACE 추가 >>>
+    TRACE(_T("View::OnDraw: Called.\n"));
+    // <<< --- 추가 끝 --- >>>
+
     CFactoryVisionClientDoc* pDoc = GetDocument(); ASSERT_VALID(pDoc); if (!pDoc) return;
 
     CRect rc; GetClientRect(&rc); if (rc.Width() <= 0 || rc.Height() <= 0) return;
@@ -76,17 +86,43 @@ void CFactoryVisionClientView::OnDraw(CDC* pDC)
 
 void CFactoryVisionClientView::DrawVideo(Gdiplus::Graphics& g, const Gdiplus::RectF& r)
 {
+    // <<< TRACE 추가 >>>
+    TRACE(_T("View::DrawVideo: Called for active cam %d.\n"), m_nActiveCameraIndex);
+    // <<< --- 추가 끝 --- >>>
+
     Gdiplus::SolidBrush black(Gdiplus::Color(255, 0, 0, 0));
     g.FillRectangle(&black, r);
 
     cv::Mat frame;
+    bool frameValid = false; // 프레임 유효성 플래그
     {
         CSingleLock lock(&m_csFrame[m_nActiveCameraIndex], TRUE);
-        if (!m_CurrentFrames[m_nActiveCameraIndex].empty()) frame = m_CurrentFrames[m_nActiveCameraIndex].clone();
+        if (!m_CurrentFrames[m_nActiveCameraIndex].empty()) {
+            try {
+                frame = m_CurrentFrames[m_nActiveCameraIndex].clone();
+                frameValid = !frame.empty(); // 복제 성공 및 비어있지 않은지 확인
+            }
+            catch (const cv::Exception& e) {
+                TRACE(_T("View::DrawVideo: cv::Exception during clone for Cam %d: %s\n"), m_nActiveCameraIndex, CString(e.what()));
+                frameValid = false; // 복제 실패
+            }
+            catch (...) {
+                TRACE(_T("View::DrawVideo: Unknown exception during clone for Cam %d\n"), m_nActiveCameraIndex);
+                frameValid = false; // 복제 실패
+            }
+        }
     }
 
-    if (!frame.empty()) DrawBitmap(g, frame, r, true);
+    if (frameValid) { // 유효한 프레임이 있을 때만 그림
+        // <<< TRACE 추가 >>>
+        TRACE(_T("View::DrawVideo: Drawing frame (Size: %dx%d)\n"), frame.cols, frame.rows);
+        // <<< --- 추가 끝 --- >>>
+        DrawBitmap(g, frame, r, true);
+    }
     else {
+        // <<< TRACE 추가 >>>
+        TRACE(_T("View::DrawVideo: No valid frame to draw for cam %d.\n"), m_nActiveCameraIndex);
+        // <<< --- 추가 끝 --- >>>
         Gdiplus::StringFormat f; f.SetAlignment(Gdiplus::StringAlignmentCenter); f.SetLineAlignment(Gdiplus::StringAlignmentCenter);
         Gdiplus::SolidBrush t(Gdiplus::Color(180, 150, 150, 150));
         if (m_pFontLarge) DrawTextWithShadow(g, _T("NO SIGNAL"), m_pFontLarge, r, &t, &f);
@@ -152,24 +188,43 @@ void CFactoryVisionClientView::DrawDashboard(Gdiplus::Graphics& g, const Gdiplus
 void CFactoryVisionClientView::DrawBitmap(Gdiplus::Graphics& g, const cv::Mat& img, const Gdiplus::RectF& r, bool keepAR)
 {
     if (img.empty() || r.Width <= 0 || r.Height <= 0) return;
-    if (img.type() != CV_8UC3 && img.type() != CV_8UC1) return;
+    // BGR8 (CV_8UC3) 또는 Grayscale (CV_8UC1) 확인
+    if (img.type() != CV_8UC3 && img.type() != CV_8UC1) {
+        TRACE(_T("View::DrawBitmap: Invalid image type (%d).\n"), img.type());
+        return;
+    }
 
     cv::Mat displayImg;
     if (img.type() == CV_8UC1)
         cv::cvtColor(img, displayImg, cv::COLOR_GRAY2BGR);
     else
-        displayImg = img;
+        displayImg = img; // 이미 BGR8 (CV_8UC3)
 
+    // GDI+ 비트맵 생성
     Gdiplus::Bitmap bmp(displayImg.cols, displayImg.rows, displayImg.step, PixelFormat24bppRGB, (BYTE*)displayImg.data);
+
+    // 비트맵 생성 성공 여부 확인
+    if (bmp.GetLastStatus() != Gdiplus::Ok) {
+        TRACE(_T("View::DrawBitmap: Gdiplus::Bitmap creation failed (Status: %d).\n"), bmp.GetLastStatus());
+        return;
+    }
+
     Gdiplus::RectF rd = r;
     if (keepAR) {
+        // (비율 계산 로직 - 변경 없음)
         Gdiplus::REAL rc = r.Width / r.Height;
         Gdiplus::REAL ri = (displayImg.cols > 0 && displayImg.rows > 0) ? (static_cast<Gdiplus::REAL>(displayImg.cols) / static_cast<Gdiplus::REAL>(displayImg.rows)) : 1.0f;
         if (rc > ri) { rd.Width = ri * r.Height; rd.X = r.X + (r.Width - rd.Width) / 2.0f; }
         else { rd.Height = r.Width / ri;  rd.Y = r.Y + (r.Height - rd.Height) / 2.0f; }
     }
-    g.DrawImage(&bmp, rd);
+
+    // 이미지 그리기
+    Gdiplus::Status drawStat = g.DrawImage(&bmp, rd);
+    if (drawStat != Gdiplus::Ok) {
+        TRACE(_T("View::DrawBitmap: g.DrawImage failed (Status: %d).\n"), drawStat);
+    }
 }
+
 
 void CFactoryVisionClientView::DrawTextWithShadow(Gdiplus::Graphics& g, const CString& t, Gdiplus::Font* f,
     const Gdiplus::RectF& r, const Gdiplus::Brush* b, Gdiplus::StringFormat* fmt)
@@ -186,28 +241,61 @@ BOOL CFactoryVisionClientView::OnEraseBkgnd(CDC*) { return TRUE; }
 
 void CFactoryVisionClientView::SetActiveCamera(int idx)
 {
-    if (idx >= 0 && idx < MAX_CAMERAS && m_nActiveCameraIndex != idx) { m_nActiveCameraIndex = idx; Invalidate(FALSE); }
+    if (idx >= 0 && idx < MAX_CAMERAS && m_nActiveCameraIndex != idx) {
+        m_nActiveCameraIndex = idx;
+        TRACE(_T("View::SetActiveCamera: Active camera changed to %d\n"), idx);
+        Invalidate(FALSE); // 활성 카메라 변경 시 즉시 뷰 갱신
+    }
 }
 
 LRESULT CFactoryVisionClientView::OnUpdateFrame(WPARAM w, LPARAM l)
 {
     int cam = (int)w; cv::Mat* p = (cv::Mat*)l;
-    if (!p || cam < 0 || cam >= MAX_CAMERAS || p->empty()) { delete p; return 0; }
 
-    { CSingleLock lock(&m_csFrame[cam], TRUE); m_CurrentFrames[cam] = p->clone(); }
+    // <<< TRACE 추가 >>>
+    TRACE(_T("View::OnUpdateFrame: Received for Cam %d (Mat: %p)\n"), cam, p);
+    // <<< --- 추가 끝 --- >>>
+
+    if (!p || cam < 0 || cam >= MAX_CAMERAS || p->empty()) {
+        TRACE(_T("View::OnUpdateFrame: Invalid Mat pointer or index. Deleting.\n"));
+        delete p; return 0;
+    }
+
+    {
+        CSingleLock lock(&m_csFrame[cam], TRUE);
+        try {
+            m_CurrentFrames[cam] = p->clone();
+            // <<< TRACE 추가 >>>
+            TRACE(_T("View::OnUpdateFrame: Cloned Mat for Cam %d (Size: %dx%d)\n"),
+                cam, m_CurrentFrames[cam].cols, m_CurrentFrames[cam].rows);
+            // <<< --- 추가 끝 --- >>>
+        }
+        catch (const cv::Exception& e) {
+            TRACE(_T("View::OnUpdateFrame: cv::Exception during clone for Cam %d: %s\n"), cam, CString(e.what()));
+            m_CurrentFrames[cam] = cv::Mat(); // 실패 시 비우기
+        }
+        catch (...) {
+            TRACE(_T("View::OnUpdateFrame: Unknown exception during clone for Cam %d\n"), cam);
+            m_CurrentFrames[cam] = cv::Mat(); // 실패 시 비우기
+        }
+    } // Lock 해제
+
     if (CWnd* pMain = AfxGetMainWnd())
     {
         auto* pFrm = dynamic_cast<CMainFrame*>(pMain);
-        // --- 수정된 부분 (GetLivePanel() 사용 확인, MainFrm.h에 선언 필요) ---
-        if (pFrm && pFrm->GetLivePanel()) pFrm->GetLivePanel()->OnNewFrame(cam, *p);
-        // --- 수정 끝 ---
+        if (pFrm && pFrm->GetLivePanel()) pFrm->GetLivePanel()->OnNewFrame(cam, *p); // LivePanel에도 전달
     }
 
-    delete p;
-    if (cam == m_nActiveCameraIndex) Invalidate(FALSE);
+    delete p; // 원본 Mat 삭제
+
+    if (cam == m_nActiveCameraIndex) { // 현재 활성 카메라일 때만 갱신
+        // <<< TRACE 추가 >>>
+        TRACE(_T("View::OnUpdateFrame: Invalidating view for active Cam %d\n"), cam);
+        // <<< --- 추가 끝 --- >>>
+        Invalidate(FALSE);
+    }
     return 0;
 }
-
 LRESULT CFactoryVisionClientView::OnInspectionResult(WPARAM, LPARAM l)
 {
     InspectionResult* r = (InspectionResult*)l;

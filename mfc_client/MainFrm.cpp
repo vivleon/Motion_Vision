@@ -20,6 +20,12 @@ BEGIN_MESSAGE_MAP(CMainFrame, CFrameWnd)
     ON_MESSAGE(WM_TCP_STATUS, &CMainFrame::OnTcpStatus)
     ON_MESSAGE(WM_CAMERA_DISCONNECTED, &CMainFrame::OnCameraDisconnected)
     ON_MESSAGE(WM_CAMERA_STATUS, &CMainFrame::OnCameraStatus)
+
+    // <<< 상태 표시줄 및 타이머 핸들러 추가 >>>
+    ON_MESSAGE(WM_UPDATE_STATUS_PANE, &CMainFrame::OnUpdateStatusPane)
+    ON_WM_TIMER()
+    // <<< --- 추가 끝 --- >>>
+
     ON_COMMAND_RANGE(ID_CAMERA_BTN_BASE, ID_CAMERA_BTN_BASE + 63, &CMainFrame::OnCameraViewClick)
     ON_COMMAND(ID_MANUAL_CAPTURE_BTN, &CMainFrame::OnManualCaptureClick)
     ON_COMMAND(ID_SETTINGS_BTN, &CMainFrame::OnSettingsClick)
@@ -31,51 +37,62 @@ BEGIN_MESSAGE_MAP(CMainFrame, CFrameWnd)
     ON_COMMAND(ID_VIEW_HIDE, &CMainFrame::OnHidePanel)
 END_MESSAGE_MAP()
 
+// (CMainFrame 생성자는 변경 없음)
 CMainFrame::CMainFrame() noexcept
 {
 }
 
 CMainFrame::~CMainFrame()
 {
+    // <<< 타이머 종료 >>>
+    KillTimer(TIMER_ID_STATUS_UPDATE);
+    // <<< --- 종료 끝 --- >>>
+
     // 앱 종료 직전: 카메라 설정/패널 상태 저장
     SaveConfigs();
 
     // 카메라 전부 정리 (스레드 종료/소켓 종료 포함)
     m_CameraManager.DisconnectAll();
+
+    // <<< 동적 생성된 버튼 메모리 해제 추가 >>>
+    for (CButton* pBtn : m_vecCamButtons) {
+        if (pBtn) {
+            // 윈도우 핸들이 유효하면(아직 파괴되지 않았다면) 파괴
+            if (::IsWindow(pBtn->GetSafeHwnd())) {
+                pBtn->DestroyWindow();
+            }
+            delete pBtn; // CButton 객체 자체 삭제
+        }
+    }
+    m_vecCamButtons.clear();
+    // <<< --- 추가 끝 --- >>>
 }
 
+// (PreCreateWindow는 변경 없음)
 BOOL CMainFrame::PreCreateWindow(CREATESTRUCT& cs)
 {
     if (!CFrameWnd::PreCreateWindow(cs))
         return FALSE;
-
-    // 스타일이나 크기 조정은 기존 코드 유지
     return TRUE;
 }
 
-// ----------------------------------------------------------
-// 메인 프레임 생성 직후 초기화
-// ----------------------------------------------------------
+
 int CMainFrame::OnCreate(LPCREATESTRUCT lpCreateStruct)
 {
     if (CFrameWnd::OnCreate(lpCreateStruct) == -1)
         return -1;
 
-    // 상태바 만들기
-    if (!m_wndStatusBar.Create(this))
-        return -1;
-    static UINT indicators[] = { ID_SEPARATOR };
-    m_wndStatusBar.SetIndicators(indicators, 1);
+    // <<< 상태바 초기화 수정 >>>
+    InitializeStatusBar();
+    // <<< --- 수정 끝 --- >>>
 
-    // UI 폰트 생성 (버튼에 쓸 깔끔한 폰트)
+    // UI 폰트 생성
     LOGFONT lf{};
     lf.lfHeight = -16;
     _tcscpy_s(lf.lfFaceName, _T("Segoe UI"));
     m_FontUI.CreateFontIndirect(&lf);
 
-    // 패널/촬영/설정 버튼 만들기
-    // ⚠ 이 문자열(이모지 포함)은 UTF-8 저장 안 되어 있으면 깨질 수 있음
-    // 필요하면 "패널"/"촬영"/"설정" 같은 한글로만 바꿔도 됨
+    // 버튼 만들기
     m_btnTogglePanel.Create(_T("패널"), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         CRect(0, 0, 0, 0), this, ID_VIEW_TOGGLE_LIVEPANEL);
     m_btnManualCapture.Create(_T("촬영"), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -87,27 +104,40 @@ int CMainFrame::OnCreate(LPCREATESTRUCT lpCreateStruct)
     m_btnManualCapture.SetFont(&m_FontUI);
     m_btnSettings.SetFont(&m_FontUI);
 
-    // 카메라 설정 / 패널 상태 불러오기 (config.ini)
-    LoadConfigs();              // -> m_CamConfigs, m_LivePanel의 상태/도킹 모드 등 채움
+    // 설정 불러오기
+    LoadConfigs();
 
-    // --- 기존 ---
-    /*
-    m_CameraManager.SetNotifyHwnd(m_hWnd);
-    m_CameraManager.ApplyConfigs(m_CamConfigs);
-    m_CameraManager.ConnectAll();
-    */
-
-    for (size_t i = 0; i < m_CamConfigs.size(); ++i)
+    // <<< 카메라 연결 및 상태 초기화 수정 >>>
+    m_CameraStatusStrings.fill(_T("Not Used")); // 모든 상태 초기화
+    for (size_t i = 0; i < m_CamConfigs.size(); ++i) // ini에 설정된 카메라만
     {
         const CameraConfig& cfg = m_CamConfigs[i];
-        m_CameraManager.ConnectCamera(cfg, m_hWnd);
-    }
 
-    // LivePanel 탭 구성 (카메라별 CAM1, CAM2 ...)
+        // 설정 파일에 있지만 인덱스가 범위를 벗어나는 경우 방지
+        if (cfg.nIndex < 0 || cfg.nIndex >= MAX_CAMERAS) continue;
+
+        m_CameraStatusStrings[cfg.nIndex] = _T("Connecting..."); // 연결 시도
+        if (m_CameraManager.ConnectCamera(cfg, m_hWnd))
+        {
+            // 성공 시 스레드가 상태를 업데이트할 때까지 Connecting 유지
+            UpdateStatusBarPane(ID_INDICATOR_CAM_BASE + cfg.nIndex, m_CameraStatusStrings[cfg.nIndex]);
+        }
+        else
+        {
+            // 연결 실패 시
+            m_CameraStatusStrings[cfg.nIndex] = _T("Connect Fail");
+            UpdateStatusBarPane(ID_INDICATOR_CAM_BASE + cfg.nIndex, m_CameraStatusStrings[cfg.nIndex]);
+        }
+    }
+    // <<< --- 수정 끝 --- >>>
+
+    // 카메라 버튼 생성 (설정 로드 및 연결 시도 이후)
+    CreateDynamicButtonsLayout();
+
+    // LivePanel 탭 구성
     m_LivePanel.BuildTabs(m_CamConfigs);
 
-    // 도킹상태 복원: config.ini에서 읽은 상태(m_LivePanel.m_state)에 맞게
-    // Hidden / DockLeft / DockRight / Floating 중 하나로 올린다
+    // 도킹상태 복원
     switch (m_LivePanel.m_state)
     {
     case CLivePanel::DockLeft:  m_LivePanel.DockLeftPane();  break;
@@ -115,19 +145,90 @@ int CMainFrame::OnCreate(LPCREATESTRUCT lpCreateStruct)
     case CLivePanel::Floating:  m_LivePanel.FloatPane();     break;
     case CLivePanel::Hidden:
     default:
-        // Hidden이면 그냥 숨겨둠. 아직 Create조차 안 됐을 수도 있음.
         break;
     }
 
-    // 뷰 포인터 캐시해두면 편함
     m_pView = DYNAMIC_DOWNCAST(CFactoryVisionClientView, GetActiveView());
+    if (m_pView) m_pView->SetActiveCamera(0); // 뷰에 기본 카메라 설정
 
-    // 창 처음 레이아웃 맞춰주기
     CRect rc; GetClientRect(&rc);
     UpdateLayout(rc.Width(), rc.Height());
 
+    // <<< 상태 업데이트용 타이머 시작 >>>
+    SetTimer(TIMER_ID_STATUS_UPDATE, 1000, nullptr); // 1초마다
+    // <<< --- 시작 끝 --- >>>
+
     return 0;
 }
+
+
+// <<< 상태 표시줄 초기화 함수 구현 >>>
+void CMainFrame::InitializeStatusBar()
+{
+    if (!m_wndStatusBar.Create(this))
+    {
+        TRACE0("Failed to create status bar\n");
+        return;
+    }
+
+    // Pane ID 배열 동적 생성 (ID_INDICATOR_STATUS + MAX_CAMERAS 개)
+    UINT* indicators = new UINT[MAX_CAMERAS + 1];
+    if (!indicators) {
+        TRACE0("Failed to allocate memory for status bar indicators\n");
+        return;
+    }
+
+    indicators[0] = ID_INDICATOR_STATUS; // 첫 번째 Pane (기본 메시지)
+    for (int i = 0; i < MAX_CAMERAS; ++i) {
+        indicators[i + 1] = ID_INDICATOR_CAM_BASE + i; // 각 카메라 상태 Pane ID
+    }
+
+    // 상태 표시줄에 Pane 설정
+    if (!m_wndStatusBar.SetIndicators(indicators, MAX_CAMERAS + 1)) // 총 개수는 MAX_CAMERAS + 1
+    {
+        TRACE0("Failed to set status bar indicators\n");
+        delete[] indicators; // 메모리 해제
+        return;
+    }
+
+    delete[] indicators; // 배열 사용 끝났으므로 해제
+
+    // 각 Pane의 스타일 및 너비 설정
+    // 첫 번째 Pane (ID_INDICATOR_STATUS): 가변 폭
+    m_wndStatusBar.SetPaneInfo(0, ID_INDICATOR_STATUS, SBPS_NORMAL | SBPS_STRETCH, 0);
+
+    // 카메라 상태 Pane (ID_INDICATOR_CAM_BASE부터): 고정 폭
+    for (int i = 0; i < MAX_CAMERAS; ++i) {
+        // Pane 인덱스는 1부터 시작 (0은 ID_INDICATOR_STATUS)
+        int nPaneIndex = i + 1;
+        UINT nPaneID = ID_INDICATOR_CAM_BASE + i;
+        m_wndStatusBar.SetPaneInfo(nPaneIndex, nPaneID, SBPS_NORMAL, 100); // 예: 너비 100
+
+        CString initialText;
+        initialText.Format(_T("CAM %d: ---"), i + 1);
+        m_wndStatusBar.SetPaneText(nPaneIndex, initialText);
+    }
+}
+// <<< --- 구현 끝 --- >>>
+
+// <<< 특정 Pane 텍스트 업데이트 함수 구현 >>>
+void CMainFrame::UpdateStatusBarPane(int nPaneID, const CString& sText)
+{
+    if (::IsWindow(m_wndStatusBar.GetSafeHwnd())) // 상태바 윈도우 유효성 검사
+    {
+        // GetPaneInfo 대신 CommandToIndex 사용
+        int nPaneIndex = m_wndStatusBar.CommandToIndex(nPaneID);
+        if (nPaneIndex != -1) // 유효한 Pane ID인지 확인
+        {
+            m_wndStatusBar.SetPaneText(nPaneIndex, sText);
+        }
+        else
+        {
+            // TRACE(_T("UpdateStatusBarPane: Invalid Pane ID %d\n"), nPaneID);
+        }
+    }
+}
+// <<< --- 구현 끝 --- >>>
 
 
 // ----------------------------------------------------------
@@ -452,24 +553,148 @@ void CMainFrame::OnHidePanel()
 // ----------------------------------------------------------
 LRESULT CMainFrame::OnTcpStatus(WPARAM wParam, LPARAM lParam)
 {
-    // 예: wParam = camIndex, lParam=연결/끊김 상태 코드
-    // 상태바 텍스트 갱신 등 작성했던 로직 그대로 두면 됨
+    int camIndex = (int)wParam;
+    BOOL bConnected = (BOOL)lParam;
+    CString sStatus;
+
+    if (camIndex >= 0 && camIndex < MAX_CAMERAS) {
+        if (bConnected) {
+            // TCP만 연결된 상태. Grab 스레드 상태는 OnCameraStatus나 타이머에서 확인.
+            sStatus = _T("TCP OK");
+            // m_CameraStatusStrings[camIndex] = sStatus; // 타이머가 덮어쓸 수 있으므로, 일단 보류
+        }
+        else {
+            sStatus = _T("TCP Fail");
+            m_CameraStatusStrings[camIndex] = sStatus; // 연결 실패는 확실히 기록
+        }
+
+        // PostMessage를 사용하여 메인 스레드에서 상태바 업데이트
+        PostMessage(WM_UPDATE_STATUS_PANE, (WPARAM)(ID_INDICATOR_CAM_BASE + camIndex), (LPARAM) new CString(sStatus));
+    }
     return 0;
 }
 
 LRESULT CMainFrame::OnCameraDisconnected(WPARAM wParam, LPARAM lParam)
 {
-    // 특정 카메라 끊김 처리 등
+    int camIndex = (int)wParam;
+    CString sStatus = _T("Disconnected");
+
+    if (camIndex >= 0 && camIndex < MAX_CAMERAS) {
+        m_CameraStatusStrings[camIndex] = sStatus;
+        PostMessage(WM_UPDATE_STATUS_PANE, (WPARAM)(ID_INDICATOR_CAM_BASE + camIndex), (LPARAM) new CString(sStatus));
+        // TODO: 필요시 재연결 로직
+    }
     return 0;
 }
 
 LRESULT CMainFrame::OnCameraStatus(WPARAM wParam, LPARAM lParam)
 {
-    // 카메라 상태 업데이트 등
+    int camIndex = (int)wParam;
+    CString* pStatus = (CString*)lParam; // new CString으로 전달됨
+
+    if (camIndex >= 0 && camIndex < MAX_CAMERAS && pStatus) {
+        m_CameraStatusStrings[camIndex] = *pStatus;
+        // PostMessage로 전달 (pStatus의 소유권도 함께 전달)
+        PostMessage(WM_UPDATE_STATUS_PANE, (WPARAM)(ID_INDICATOR_CAM_BASE + camIndex), (LPARAM)pStatus);
+    }
+    else {
+        delete pStatus; // 잘못된 경우 메모리 해제
+    }
     return 0;
 }
 
+// <<< 상태 표시줄 업데이트 메시지 핸들러 구현 >>>
+LRESULT CMainFrame::OnUpdateStatusPane(WPARAM wParam, LPARAM lParam)
+{
+    int nPaneID = (int)wParam; // Pane ID
+    CString* pStatus = (CString*)lParam; // 상태 문자열 포인터 (new로 할당됨)
 
+    if (pStatus)
+    {
+        UpdateStatusBarPane(nPaneID, *pStatus);
+        delete pStatus; // <<< 여기서 CString 객체 해제
+    }
+    return 0;
+}
+// <<< --- 구현 끝 --- >>>
+
+// <<< 타이머 핸들러 구현 >>>
+void CMainFrame::OnTimer(UINT_PTR nIDEvent)
+{
+    if (nIDEvent == TIMER_ID_STATUS_UPDATE)
+    {
+        // 설정된 카메라 수 만큼 주기적으로 상태 확인
+        for (int i = 0; i < (int)m_CamConfigs.size(); ++i)
+        {
+            int camIndex = m_CamConfigs[i].nIndex; // 실제 카메라 인덱스
+            if (camIndex < 0 || camIndex >= MAX_CAMERAS) continue;
+
+            CString currentStatusText = _T("Unknown");
+            bool isConnected = m_CameraManager.IsCameraConnected(camIndex);
+            bool isGrabbing = false;
+
+            try {
+                // IsCameraConnected가 true일 때만 IsGrabbing 시도
+                if (isConnected && m_CameraManager.m_Cameras[camIndex].IsOpen()) {
+                    isGrabbing = m_CameraManager.m_Cameras[camIndex].IsGrabbing();
+                }
+            }
+            catch (const Pylon::GenericException& e) {
+                // IsGrabbing() 호출 중 예외 발생 가능성 (예: 장치 제거)
+                TRACE(_T("Exception checking IsGrabbing for Cam %d: %s\n"), camIndex, CString(e.GetDescription()));
+                isConnected = false; // 예외 발생 시 연결 끊김으로 간주
+                isGrabbing = false;
+                // 연결 끊김 메시지 처리
+                PostMessage(WM_CAMERA_DISCONNECTED, (WPARAM)camIndex, 0);
+            }
+            catch (...) {
+                TRACE(_T("Unknown exception checking IsGrabbing for Cam %d\n"), camIndex);
+                isConnected = false;
+                isGrabbing = false;
+                PostMessage(WM_CAMERA_DISCONNECTED, (WPARAM)camIndex, 0);
+            }
+
+            // 상태 문자열 결정
+            if (isGrabbing) {
+                currentStatusText = _T("Grabbing"); // 1순위: Grab 중
+            }
+            else if (isConnected) {
+                currentStatusText = _T("Connected"); // 2순위: 연결됨 (Grab 안함)
+            }
+            else {
+                // 3순위: 이전에 설정된 오류 상태 (예: "TCP Fail", "Disconnected") 유지
+                // 또는 기본값 "Not Connected"
+                if (m_CameraStatusStrings[camIndex] == _T("Connecting...") ||
+                    m_CameraStatusStrings[camIndex] == _T("Grabbing") ||
+                    m_CameraStatusStrings[camIndex] == _T("Connected") ||
+                    m_CameraStatusStrings[camIndex] == _T("Not Used")) // 이전 상태가 오류가 아니었다면
+                {
+                    currentStatusText = _T("Not Connected");
+                }
+                else // "TCP Fail", "Disconnected" 등 오류 상태 유지
+                {
+                    currentStatusText = m_CameraStatusStrings[camIndex];
+                }
+            }
+
+            // 상태가 변경되었을 때만 업데이트
+            if (m_CameraStatusStrings[camIndex] != currentStatusText) {
+                m_CameraStatusStrings[camIndex] = currentStatusText;
+                // PostMessage로 상태바 업데이트 요청
+                PostMessage(WM_UPDATE_STATUS_PANE, (WPARAM)(ID_INDICATOR_CAM_BASE + camIndex), (LPARAM) new CString(currentStatusText));
+            }
+
+            // 카메라 버튼 활성화/비활성화
+            // m_vecCamButtons는 m_CamConfigs 순서대로 생성됨
+            if (i < (int)m_vecCamButtons.size() && m_vecCamButtons[i] && ::IsWindow(m_vecCamButtons[i]->GetSafeHwnd())) {
+                // Grab 중일 때만 버튼 활성화 (또는 isConnected일 때 활성화 - 정책에 따라)
+                m_vecCamButtons[i]->EnableWindow(isGrabbing);
+            }
+        }
+    }
+
+    CFrameWnd::OnTimer(nIDEvent);
+}
 // ----------------------------------------------------------
 // 설정 불러오기 / 저장하기 (ini)
 // ----------------------------------------------------------
